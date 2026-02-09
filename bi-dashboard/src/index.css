@@ -1,0 +1,8 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Reusable BI-style button */
+.btn {
+  @apply px-4 py-2 rounded bg-gray-200 hover:bg-gray-300 transition;
+}

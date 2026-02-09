@@ -1,0 +1,12 @@
+node_modules/
+.env
+dist/
+build/
+.DS_Store
+*.log
+.vscode/
+.idea/
+users.json
+verification_codes.json
+server/credentials.json
+.agent/
