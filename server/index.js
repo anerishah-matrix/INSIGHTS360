@@ -78,8 +78,9 @@ const auth = new google.auth.GoogleAuth({
 const drive = google.drive({ version: "v3", auth });
 
 async function listExcelFiles(folderId) {
-    const q = `'${folderId}' in parents and trashed=false and (mimeType='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' or mimeType='text/csv')`;
-    const res = await drive.files.list({ q, fields: "files(id,name,modifiedTime)", pageSize: 1000 });
+    // Included Google Sheets in the query
+    const q = `'${folderId}' in parents and trashed=false and (mimeType='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' or mimeType='text/csv' or mimeType='application/vnd.google-apps.spreadsheet')`;
+    const res = await drive.files.list({ q, fields: "files(id,name,modifiedTime,mimeType)", pageSize: 1000 });
     return res.data.files || [];
 }
 
@@ -99,10 +100,16 @@ async function listExcelFilesRecursive(folderId, depth = 0, allFiles = []) {
     return allFiles;
 }
 
-async function downloadFile(fileId, retries = 3) {
+async function downloadFile(fileId, mimeType, retries = 3) {
     for (let i = 0; i < retries; i++) {
         try {
-            const res = await drive.files.get({ fileId, alt: "media" }, { responseType: "arraybuffer" });
+            let res;
+            if (mimeType === 'application/vnd.google-apps.spreadsheet') {
+                // Export Google Sheets as Excel
+                res = await drive.files.export({ fileId, mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }, { responseType: "arraybuffer" });
+            } else {
+                res = await drive.files.get({ fileId, alt: "media" }, { responseType: "arraybuffer" });
+            }
             return Buffer.from(res.data);
         } catch (error) {
             if ((error.code === 'ECONNRESET' || error.code === 'ETIMEDOUT' || error.status >= 500) && i < retries - 1) {
@@ -119,21 +126,14 @@ function parseExcelContent(buffer, fileName) {
     if (fileName && fileName.toLowerCase().includes("product movement")) {
         const validSheets = [];
         for (const sheetName of workbook.SheetNames) {
-            if (!sheetName.toLowerCase().includes("overall")) continue;
-            const sheet = workbook.Sheets[sheetName];
-            const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, raw: true });
-            let isValid = false;
-            const checkLimit = Math.min(rows.length, 15);
-            for (let i = 0; i < checkLimit; i++) {
-                const rowStr = JSON.stringify(rows[i] || []).toUpperCase();
-                if (rowStr.includes("TARGET") && rowStr.includes("ACHIEVED")) {
-                    isValid = true;
-                    break;
-                }
+            if (sheetName.toLowerCase().includes("overall")) {
+                const sheet = workbook.Sheets[sheetName];
+                // Just load the sheet if it has "overall" in the name
+                const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, raw: true });
+                validSheets.push({ sheetName, data: rows });
             }
-            if (isValid) validSheets.push({ sheetName, data: rows });
         }
-        return { isProductMovement: true, sheets: validSheets };
+        if (validSheets.length > 0) return { isProductMovement: true, sheets: validSheets };
     }
     const sheet = workbook.Sheets[workbook.SheetNames[0]];
     const rows = XLSX.utils.sheet_to_json(sheet, { raw: true });
@@ -242,15 +242,31 @@ app.post("/api/auth/preferences", async (req, res) => {
 });
 
 // Drive API
+app.get("/api/drive/config", async (req, res) => {
+    try {
+        const creds = JSON.parse(fs.readFileSync(path.join(__dirname, "credentials.json"), "utf-8"));
+        res.json({ clientEmail: creds.client_email });
+    } catch (e) {
+        res.status(500).json({ error: "Could not read credentials.json. Please ensure it exists in the server folder." });
+    }
+});
+
 app.post("/api/drive/folder", async (req, res) => {
     try {
-        const { folderId } = req.body;
+        let { folderId } = req.body;
+
+        // Extract ID from URL if necessary
+        if (folderId.includes("drive.google.com")) {
+            const match = folderId.match(/\/folders\/([a-zA-Z0-9_-]+)/);
+            if (match) folderId = match[1];
+        }
+
         const files = await listExcelFilesRecursive(folderId);
         let merged = [];
         let productMovementSheets = [];
 
         for (const f of files) {
-            const buf = await downloadFile(f.id);
+            const buf = await downloadFile(f.id, f.mimeType);
             const result = parseExcelContent(buf, f.name);
             if (result.isProductMovement) {
                 result.sheets.forEach(s => productMovementSheets.push({ fileName: f.name, sheetName: s.sheetName, data: s.data, modifiedTime: f.modifiedTime }));
@@ -264,6 +280,7 @@ app.post("/api/drive/folder", async (req, res) => {
         res.status(500).json({ error: e.message });
     }
 });
+
 
 const server = app.listen(5001, () => { console.log("✅ Backend running at http://localhost:5001"); });
 server.timeout = 600000;

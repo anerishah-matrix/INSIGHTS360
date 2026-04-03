@@ -288,72 +288,93 @@ export const groupSalesData = ({
   }, {});
 };
 export const processProductMovementData = (rawArrays, fileName = "Unknown", sheetName = "Unknown") => {
-  if (!rawArrays || rawArrays.length < 3) return [];
+  if (!rawArrays || rawArrays.length < 2) return [];
   let headerRowIndex = -1;
-  const headerRegex = /([A-Za-z]{3})[\s'’\-]*(\d{2,4})[\s\-–—]*(TARGET|ACHIEVED)/i;
-  for (let i = 0; i < 15 && i < rawArrays.length; i++) {
+  const headerRegex = /([A-Za-z]{3})[\s'’\-]*(\d{2,4})/i;
+
+  for (let i = 0; i < 5 && i < rawArrays.length; i++) {
     const row = rawArrays[i] || [];
     const hasMonthHeader = row.some(cell => {
       const cellStr = (cell || "").toString().trim();
-      return headerRegex.test(cellStr);
+      return headerRegex.test(cellStr) && (
+        /tgt/i.test(cellStr) || /ach/i.test(cellStr) || /sales/i.test(cellStr) || /target/i.test(cellStr) || /achieved/i.test(cellStr)
+      );
     });
     if (hasMonthHeader) {
       headerRowIndex = i;
       break;
     }
   }
+
   if (headerRowIndex === -1) return [];
+
   const mainHeader = rawArrays[headerRowIndex];
-  const subHeader = rawArrays[headerRowIndex + 1] || [];
   const columnMap = [];
-  let currentMonth = null;
-  let currentYear = null;
-  let currentType = null;
   const MONTH_MAP = {
     'JAN': 'Jan', 'FEB': 'Feb', 'MAR': 'Mar', 'APR': 'Apr',
     'MAY': 'May', 'JUN': 'Jun', 'JUL': 'Jul', 'AUG': 'Aug',
     'SEP': 'Sep', 'OCT': 'Oct', 'NOV': 'Nov', 'DEC': 'Dec'
   };
+
+  let currentMonth = null;
+  let currentYear = null;
+
   for (let c = 0; c < mainHeader.length; c++) {
-    const mainTitle = (mainHeader[c] || "").toString().trim();
-    if (mainTitle) {
-      const match = mainTitle.match(headerRegex);
-      if (match) {
-        const rawMonth = match[1].toUpperCase();
+    const title = (mainHeader[c] || "").toString().trim();
+    if (!title) continue;
+
+    const match = title.match(headerRegex);
+    if (match) {
+      const rawMonth = match[1].toUpperCase();
+      // Only update currentMonth if it's a valid month key
+      if (MONTH_MAP[rawMonth]) {
         currentMonth = MONTH_MAP[rawMonth];
-        let yearStr = match[2];
-        currentYear = yearStr.length === 2 ? `20${yearStr}` : yearStr;
-        currentType = match[3].toUpperCase() === "TARGET" ? "Target" : "Achieved";
       }
+      let yearStr = match[2];
+      currentYear = yearStr.length === 2 ? `20${yearStr}` : yearStr;
     }
-    if (currentMonth && currentType) {
-      const subTitle = (subHeader[c] || "").toString().trim().toLowerCase();
-      let metric = null;
-      if (subTitle.startsWith("qty") || subTitle === "quantity") {
-        metric = "quantity";
-      }
-      else if (subTitle === "cm2") {
-        metric = "cm2";
-      }
-      else if (subTitle === "value" || subTitle === "sales" || subTitle === "amt") {
-        metric = "value";
-      }
-      if (metric) {
-        const monthIndex = Object.keys(MONTH_MAP).indexOf(currentMonth.toUpperCase());
-        if (monthIndex !== -1) {
-          columnMap.push({
-            index: c,
-            month: currentMonth,
-            monthIndex,
-            year: currentYear,
-            type: currentType,
-            metric
-          });
-        }
+
+    if (!currentMonth) continue;
+
+    let currentType = "Achieved";
+    if (/TGT|TARGET/i.test(title)) currentType = "Target";
+
+    let metric = null;
+    const lowerTitle = title.toLowerCase();
+
+    // Skip unwanted columns
+    if (lowerTitle.includes("rm") || lowerTitle.includes("mfg") || (lowerTitle.includes("cm") && !lowerTitle.includes("cm2")) || lowerTitle.includes("r&d") || lowerTitle.includes("r & d")) {
+      continue;
+    }
+
+    if (lowerTitle.includes("qty") || lowerTitle.includes("quantity")) {
+      metric = "quantity";
+    } else if (lowerTitle.includes("value") || lowerTitle.includes("sales") || lowerTitle.includes("amt")) {
+      metric = "value";
+    } else if (lowerTitle.includes("cm2")) {
+      metric = "cm2";
+    } else if (/ACH/i.test(title)) {
+      // Fallback: If it's ACH but has no specific label, and we know RM/MFG/CM/R&D are already skipped,
+      // User excel indicates ACH Qty might just be named "ACH"
+      metric = "quantity";
+    }
+
+    if (metric) {
+      const monthIndex = Object.keys(MONTH_MAP).indexOf(currentMonth.toUpperCase());
+      if (monthIndex !== -1) {
+        columnMap.push({
+          index: c,
+          month: currentMonth,
+          monthIndex,
+          year: currentYear,
+          type: currentType,
+          metric
+        });
       }
     }
   }
-  const dataStart = headerRowIndex + 2;
+
+  const dataStart = headerRowIndex + 1;
   const normalized = [];
   const cleanNumber = (val) => {
     if (val === undefined || val === null || val === "") return null;
@@ -367,18 +388,23 @@ export const processProductMovementData = (rawArrays, fileName = "Unknown", shee
     if (isNaN(num) || num === 0) return null;
     return num;
   };
+
   for (let r = dataStart; r < rawArrays.length; r++) {
     const row = rawArrays[r];
     if (!row || row.length === 0) continue;
+
+    // First column is SR NUMBER
+    const srNumber = (row[0] || "").toString().trim();
+    if (!srNumber || srNumber.toLowerCase() === "sr") continue;
+
     const sapCode = (row[1] || "").toString().trim();
     const productName = (row[2] || "").toString().trim();
 
-    // STRICT FILTER: Ignore headers, categories, totals and FY blocks
+    if (!productName) continue;
+
     const searchable = (sapCode + productName).toLowerCase();
     const isTotalRow = searchable.includes("total") || searchable.includes("grand") || searchable.includes("summary") || searchable.includes("overall") || searchable.includes("fy ");
-
-    if (!sapCode || isNaN(Number(sapCode)) || isTotalRow) continue;
-    if (!productName) continue;
+    if (isTotalRow) continue;
 
     columnMap.forEach(map => {
       const val = row[map.index];

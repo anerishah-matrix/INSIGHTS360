@@ -133,6 +133,23 @@ function DashboardContainer() {
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState("");
     const [autoRefresh, setAutoRefresh] = useState(false);
+    const [serviceAccountEmail, setServiceAccountEmail] = useState("");
+
+    // Fetch config from backend
+    useEffect(() => {
+        const fetchConfig = async () => {
+            try {
+                const res = await fetch("http://localhost:5001/api/drive/config");
+                if (res.ok) {
+                    const data = await res.json();
+                    setServiceAccountEmail(data.clientEmail);
+                }
+            } catch (err) {
+                console.error("Failed to fetch drive config:", err);
+            }
+        };
+        fetchConfig();
+    }, []);
 
     // --- SHARED FILTERS ---
     const [selectedProducts, setSelectedProducts] = useState(() => {
@@ -180,18 +197,36 @@ function DashboardContainer() {
     useEffect(() => { localStorage.setItem(userKey("vadView"), vadView); }, [vadView, user?.email]);
     useEffect(() => { localStorage.setItem(userKey("sivadView"), sivadView); }, [sivadView, user?.email]);
 
+    // Ensure CM2 metric is only kept when on product movement page
+    useEffect(() => {
+        if (page !== "product_movement" && metric === "cm2") {
+            setMetric("value");
+        }
+    }, [page, metric, setMetric]);
+
     const [openSections, setOpenSections] = useState({ products: true, vads: false });
     const toggleSection = (s) => setOpenSections(prev => ({ ...prev, [s]: !prev[s] }));
 
     const loadFromDrive = async () => {
-        if (!folderId.trim()) return;
+        let cleanFolderId = folderId.trim();
+        if (!cleanFolderId) return;
+
+        // Extract ID from URL if necessary
+        if (cleanFolderId.includes("drive.google.com")) {
+            const match = cleanFolderId.match(/\/folders\/([a-zA-Z0-9_-]+)/);
+            if (match) {
+                cleanFolderId = match[1];
+                setFolderId(cleanFolderId); // Update UI to show only the ID
+            }
+        }
+
         setLoading(true);
         try {
             setError("");
             const res = await fetch("http://localhost:5001/api/drive/folder", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ folderId: folderId.trim() }),
+                body: JSON.stringify({ folderId: cleanFolderId }),
             });
             const json = await res.json();
             if (!res.ok) throw new Error(json.error || "Failed to load Drive data");
@@ -260,9 +295,13 @@ function DashboardContainer() {
 
     const allProducts = useMemo(() => {
         const set = new Set();
-        processedRawData.forEach(row => { if (row.__product) set.add(row.__product); });
+        if (page === "product_movement") {
+            productMovementData.forEach(row => { if (row.product) set.add(row.product); });
+        } else {
+            processedRawData.forEach(row => { if (row.__product) set.add(row.__product); });
+        }
         return Array.from(set).sort();
-    }, [processedRawData]);
+    }, [processedRawData, productMovementData, page]);
 
     const allVADs = useMemo(() => {
         const set = new Set();
@@ -275,8 +314,12 @@ function DashboardContainer() {
         processedRawData.forEach(row => {
             if (row.__fy !== "Unknown") years.add(row.__fy);
         });
+        // Also add years from product movement data
+        productMovementData.forEach(row => {
+            if (row.fy && row.fy !== "Unknown") years.add(row.fy);
+        });
         return Array.from(years).sort().reverse();
-    }, [processedRawData]);
+    }, [processedRawData, productMovementData]);
 
     return (
         <div className="min-h-screen bg-[#F8FAFC] font-sans text-gray-900 flex flex-col lg:flex-row overflow-x-hidden">
@@ -386,8 +429,11 @@ function DashboardContainer() {
                         <div className="flex items-center gap-3">
                             {page !== "sivad" && (
                                 <div className="flex bg-gray-50 p-1 rounded-xl border border-gray-100 h-[38px] transition-all">
-                                    <button onClick={() => setMetric("value")} className={`px-4 rounded-lg text-[10px] font-black uppercase tracking-widest transition-all ${metric === "value" ? "bg-white text-blue-600 shadow-sm" : "text-gray-400 hover:text-gray-600"}`}>Value</button>
+                                    <button onClick={() => setMetric("value")} className={`px-4 rounded-lg text-[10px] font-black uppercase tracking-widest transition-all ${metric === "value" ? "bg-white text-blue-600 shadow-sm" : "text-gray-400 hover:text-gray-600"}`}>Sales</button>
                                     <button onClick={() => setMetric("quantity")} className={`px-4 rounded-lg text-[10px] font-black uppercase tracking-widest transition-all ${metric === "quantity" ? "bg-white text-blue-600 shadow-sm" : "text-gray-400 hover:text-gray-600"}`}>Qty</button>
+                                    {page === "product_movement" && (
+                                        <button onClick={() => setMetric("cm2")} className={`px-4 rounded-lg text-[10px] font-black uppercase tracking-widest transition-all ${metric === "cm2" ? "bg-white text-blue-600 shadow-sm" : "text-gray-400 hover:text-gray-600"}`}>CM2</button>
+                                    )}
                                 </div>
                             )}
 
@@ -412,7 +458,7 @@ function DashboardContainer() {
                             <div className="flex items-center gap-3 bg-white border border-gray-100 h-[38px] px-4 rounded-xl shadow-sm hover:border-blue-200 transition-all cursor-pointer">
                                 <svg className="w-3.5 h-3.5 text-blue-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" /></svg>
                                 <select value={selectedYears[0] || ""} onChange={(e) => setSelectedYears(e.target.value ? [e.target.value] : [])} className="bg-transparent text-[11px] font-black text-gray-500 uppercase tracking-widest outline-none cursor-pointer">
-                                    <option value="">Yearly Filter</option>
+                                    <option value="">All Years</option>
                                     {allYears.map(y => <option key={y} value={y}>{y}</option>)}
                                 </select>
                             </div>
@@ -422,7 +468,7 @@ function DashboardContainer() {
                     <div className="flex items-center gap-4">
                         <div className="text-right">
                             <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Status</p>
-                            <p className="text-[10px] font-bold text-emerald-500 uppercase">{rawData.length > 0 ? "Connected" : "Standing by"}</p>
+                            <p className="text-[10px] font-bold text-emerald-500 uppercase">{(rawData.length > 0 || productMovementData.length > 0) ? "Connected" : "Standing by"}</p>
                         </div>
                         <div className="group relative">
                             <button className="w-9 h-9 rounded-full bg-blue-600 flex items-center justify-center text-white shadow-lg hover:bg-blue-700 transition-all active:scale-95">
@@ -444,7 +490,7 @@ function DashboardContainer() {
 
                 <div className="max-w-[1400px] w-full mx-auto px-8 py-10">
                     <main>
-                        {processedRawData.length > 0 ? (
+                        {(processedRawData.length > 0 || productMovementData.length > 0) ? (
                             page === "zone" ? (
                                 <ZonePage rawData={processedRawData} selectedProducts={selectedProducts} setSelectedProducts={setSelectedProducts} selectedYears={selectedYears} setSelectedYears={setSelectedYears} metric={metric === "value" ? "sales" : "qty"} setMetric={(m) => setMetric(m === "sales" ? "value" : "quantity")} />
                             ) : page === "vad" ? (
@@ -476,8 +522,10 @@ function DashboardContainer() {
                                                 Please ensure you have <strong>shared</strong> your Google Drive folder with the following service account email:
                                             </p>
                                             <div className="mt-3 flex items-center justify-between bg-white/50 p-2 rounded-lg border border-amber-200">
-                                                <code className="text-[11px] text-blue-600 font-bold select-all">bi-dashboard-reader@bi-dashboard-drive.iam.gserviceaccount.com</code>
-                                                <button onClick={() => navigator.clipboard.writeText('bi-dashboard-reader@bi-dashboard-drive.iam.gserviceaccount.com')} className="text-[10px] font-black text-amber-800 uppercase hover:text-blue-600 transition-colors">Copy</button>
+                                                <code className="text-[11px] text-blue-600 font-bold select-all">{serviceAccountEmail || "Loading email..."}</code>
+                                                {serviceAccountEmail && (
+                                                    <button onClick={() => navigator.clipboard.writeText(serviceAccountEmail)} className="text-[10px] font-black text-amber-800 uppercase hover:text-blue-600 transition-colors">Copy</button>
+                                                )}
                                             </div>
                                         </div>
                                     )}

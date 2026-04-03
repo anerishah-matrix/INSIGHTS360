@@ -6,7 +6,13 @@ Welcome to **Insights360**, your premium business intelligence platform for deep
 
 ## 🚀 1. Getting Started
 
-### 1.1 Secure Access
+### 1.1 Developer Setup (Critical for New Installs)
+If you have just cloned this repository, the application will not work initially because the **Google Cloud Credentials** and **Environment Variables** are ignored by Git for security.
+- **Files Required**: You must place a `credentials.json` file AND a `.env` file in the `server/` directory.
+- **Setup Instructions**: Follow the [Service Account Setup Guide](file:///d:/Aneri/matrix%20visulaisation/dashboard/docs/Service_Account_Setup_Guide.md) for step-by-step instructions.
+- **Examples**: Refer to `server/.env.example` and the Setup Guide for the required file structures.
+
+### 1.2 Secure Access
 - **Authentication**: Insights360 requires a secure login. If you don't have an account, use the **Sign Up** page to register with your corporate email.
 - **Persistent Preferences**: Your filter selections (selected products, years, metrics) are automatically saved to your profile and synced across devices.
 

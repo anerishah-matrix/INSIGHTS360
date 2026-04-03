@@ -342,7 +342,9 @@ import {
     Title,
     Filler
 } from "chart.js";
+import ChartDataLabels from 'chartjs-plugin-datalabels';
 import { format } from "date-fns";
+
 ChartJS.register(
     BarElement,
     CategoryScale,
@@ -352,19 +354,33 @@ ChartJS.register(
     PointElement,
     LineElement,
     Title,
-    Filler
+    Filler,
+    ChartDataLabels
 );
 const MONTHS_ORDER = ['Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec', 'Jan', 'Feb', 'Mar'];
 const formatNumber = (val) => {
     const num = Number(val || 0);
-    if (Math.abs(num) >= 10000000) return (num / 10000000).toFixed(2) + " Cr";
-    else if (Math.abs(num) >= 100000) return (num / 100000).toFixed(2) + " L";
+    const absNum = Math.abs(num);
+    const sign = num < 0 ? "-" : "";
+    
+    if (absNum >= 10000000) {
+        // Crores: Truncate to 2 decimals without rounding up (e.g. 1.239 -> 1.23)
+        const truncated = (Math.floor((absNum / 10000000) * 100) / 100).toFixed(2);
+        return sign + truncated + " Cr";
+    } else if (absNum >= 100000) {
+        // Lakhs: Truncate to 2 decimals (e.g. 5.699 -> 5.69)
+        const truncated = (Math.floor((absNum / 100000) * 100) / 100).toFixed(2);
+        return sign + truncated + " L";
+    } else if (absNum >= 1000) {
+        // Thousands: 5699 -> 5.6 K (Truncate to 1 decimal)
+        const truncated = (Math.floor((absNum / 1000) * 10) / 10).toFixed(1);
+        return sign + truncated + " K";
+    }
+    
     return num.toLocaleString("en-IN");
 };
-export default function ProductMovementPage({ data, selectedProducts, selectedYears, metric: globalMetric }) {
-    // We still need a local metric toggle because 'cm2' is unique to this page
-    const [localMetric, setLocalMetric] = useState(null);
-    const activeMetric = localMetric || globalMetric;
+export default function ProductMovementPage({ data, selectedProducts, selectedYears, metric: activeMetric }) {
+    const [drillDownMonth, setDrillDownMonth] = useState(null);
 
     // Filter Data based on global props
     const filteredData = useMemo(() => {
@@ -404,18 +420,22 @@ export default function ProductMovementPage({ data, selectedProducts, selectedYe
                 {
                     label: 'Target',
                     data: MONTHS_ORDER.map(m => monthlyTarget[m]),
-                    backgroundColor: '#E2E8F0',
-                    borderColor: '#94A3B8',
-                    borderWidth: 2,
-                    type: 'bar',
+                    borderColor: '#EF4444', // Red-500
+                    backgroundColor: 'rgba(239, 68, 68, 0.05)',
+                    borderWidth: 3,
+                    tension: 0.3,
+                    pointRadius: 4,
+                    pointBackgroundColor: '#FFFFFF',
+                    pointBorderWidth: 2,
+                    type: 'line',
                     order: 2,
-                    borderRadius: 4,
+                    fill: true
                 },
                 {
                     label: 'Achieved',
                     data: MONTHS_ORDER.map(m => monthlyAchieved[m]),
-                    borderColor: '#3B82F6',
-                    backgroundColor: 'rgba(59, 130, 246, 0.1)',
+                    borderColor: '#10B981', // Emerald-500
+                    backgroundColor: 'rgba(16, 185, 129, 0.1)',
                     borderWidth: 3,
                     tension: 0.3,
                     pointRadius: 4,
@@ -430,9 +450,9 @@ export default function ProductMovementPage({ data, selectedProducts, selectedYe
     }, [filteredData]);
 
     const productPerformance = useMemo(() => {
-        // If multiple products are selected or filtered, showing a breakdown makes sense
         const prodMap = {};
         filteredData.forEach(d => {
+            if (drillDownMonth && d.month !== drillDownMonth) return;
             if (!prodMap[d.product]) prodMap[d.product] = { target: 0, achieved: 0 };
             if (d.type === 'Target') prodMap[d.product].target += d.amount;
             if (d.type === 'Achieved') prodMap[d.product].achieved += d.amount;
@@ -445,10 +465,24 @@ export default function ProductMovementPage({ data, selectedProducts, selectedYe
                 pct: vals.target > 0 ? (vals.achieved / vals.target) * 100 : 0
             }))
             .sort((a, b) => b.achieved - a.achieved)
-            .slice(0, 15);
-    }, [filteredData]);
+            .slice(0, 30); // Show more products in drilldown
+    }, [filteredData, drillDownMonth]);
 
     const chartRef = useRef();
+    const onChartClick = (event) => {
+        const { current: chart } = chartRef;
+        if (!chart) return;
+
+        // Using 'index' mode ensures that clicking anywhere in the vertical column of the month triggers the drilldown
+        const elements = chart.getElementsAtEventForMode(event, 'index', { intersect: false }, true);
+        if (elements.length > 0) {
+            const index = elements[0].index;
+            const month = MONTHS_ORDER[index];
+            setDrillDownMonth(drillDownMonth === month ? null : month);
+        } else {
+            setDrillDownMonth(null);
+        }
+    };
     const downloadChart = () => {
         if (chartRef.current) {
             const link = document.createElement("a");
@@ -468,26 +502,8 @@ export default function ProductMovementPage({ data, selectedProducts, selectedYe
                     <p className="text-gray-400 text-xs font-bold uppercase tracking-widest mt-1">Target vs Achieved Real-time Tracking</p>
                 </div>
                 <div className="flex flex-wrap items-center gap-3">
-                    <div className="bg-gray-50 p-1 rounded-xl border border-gray-100 flex items-center">
-                        {[
-                            { id: 'value', label: 'Sales (Val)' },
-                            { id: 'quantity', label: 'Quantity' },
-                            { id: 'cm2', label: 'CM2' }
-                        ].map(m => (
-                            <button
-                                key={m.id}
-                                onClick={() => setLocalMetric(m.id)}
-                                className={`px-4 py-2 rounded-lg text-[10px] font-black uppercase tracking-wider transition-all ${activeMetric === m.id ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-400 hover:text-gray-600'
-                                    }`}
-                            >
-                                {m.label}
-                            </button>
-                        ))}
-                    </div>
-
                     {isFiltered && (
                         <div className="flex gap-2">
-                            <div className="h-8 w-px bg-gray-100 mx-2"></div>
                             {selectedYears.length > 0 && (
                                 <span className="bg-blue-50 text-blue-600 px-3 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-widest border border-blue-100">
                                     {selectedYears.length === 1 ? selectedYears[0] : `${selectedYears.length} Years`}
@@ -530,6 +546,15 @@ export default function ProductMovementPage({ data, selectedProducts, selectedYe
                         <p className="text-gray-400 text-[11px] font-bold uppercase tracking-widest mt-1">
                             {selectedProducts.length === 1 ? selectedProducts[0] : selectedProducts.length > 1 ? `${selectedProducts.length} Products` : "Overall Portfolio"} — {selectedYears.length === 1 ? selectedYears[0] : selectedYears.length > 1 ? `${selectedYears.length} Years` : "All Time"}
                         </p>
+                        {drillDownMonth && (
+                            <button
+                                onClick={() => setDrillDownMonth(null)}
+                                className="mt-2 flex items-center gap-1.5 text-blue-600 hover:text-blue-700 transition-colors"
+                            >
+                                <span className="bg-blue-100 px-2 py-0.5 rounded text-[10px] font-black uppercase tracking-tight">Active Filter: {drillDownMonth}</span>
+                                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M6 18L18 6M6 6l12 12" /></svg>
+                            </button>
+                        )}
                     </div>
                     <button onClick={downloadChart} className="p-2 hover:bg-gray-50 rounded-xl text-gray-400 transition-colors">
                         <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a2 2 0 002 2h12a2 2 0 002-2v-1m-4-4l-4 4m0 0l-4-4m4 4V4" /></svg>
@@ -539,6 +564,7 @@ export default function ProductMovementPage({ data, selectedProducts, selectedYe
                     <Line
                         ref={chartRef}
                         data={chartData}
+                        onClick={onChartClick}
                         options={{
                             responsive: true,
                             maintainAspectRatio: false,
@@ -562,15 +588,108 @@ export default function ProductMovementPage({ data, selectedProducts, selectedYe
                                     titleFont: { weight: 'bold' },
                                     callbacks: { label: (c) => ` ${c.dataset.label}: ${formatNumber(c.raw)}` }
                                 },
-                                datalabels: { display: false }
+                                datalabels: {
+                                    display: true,
+                                    align: 'top',
+                                    anchor: 'end',
+                                    offset: 4,
+                                    font: { size: 9, weight: 'bold' },
+                                    color: (context) => context.dataset.borderColor,
+                                    formatter: (val) => formatNumber(val)
+                                }
                             }
                         }}
                     />
                 </div>
             </div>
+
+            {drillDownMonth && productPerformance.length > 0 && (
+                <div className="bg-white p-8 rounded-[32px] border border-gray-100 shadow-[0_2px_15px_rgba(0,0,0,0.02)] animate-slideDown">
+                    <div className="flex items-center justify-between mb-8">
+                        <div>
+                            <h3 className="text-lg font-black text-gray-900">Product-wise Drilldown: {drillDownMonth}</h3>
+                            <p className="text-gray-400 text-[11px] font-bold uppercase tracking-widest mt-1">Comparing Target vs Achieved across all selected products</p>
+                        </div>
+                    </div>
+                    <div className="h-[400px]">
+                        <Line
+                            data={{
+                                labels: productPerformance.map(p => p.name.length > 20 ? p.name.substring(0, 20) + '...' : p.name),
+                                datasets: [
+                                    {
+                                        label: 'Target',
+                                        data: productPerformance.map(p => p.target),
+                                        borderColor: '#EF4444',
+                                        backgroundColor: 'rgba(239, 68, 68, 0.05)',
+                                        borderWidth: 2,
+                                        tension: 0.3,
+                                        pointRadius: 3,
+                                        fill: true
+                                    },
+                                    {
+                                        label: 'Achieved',
+                                        data: productPerformance.map(p => p.achieved),
+                                        borderColor: '#10B981',
+                                        backgroundColor: 'rgba(16, 185, 129, 0.1)',
+                                        borderWidth: 2,
+                                        tension: 0.3,
+                                        pointRadius: 3,
+                                        fill: true
+                                    }
+                                ]
+                            }}
+                            options={{
+                                responsive: true,
+                                maintainAspectRatio: false,
+                                plugins: {
+                                    legend: { position: 'top', align: 'end', labels: { usePointStyle: true, font: { weight: 'bold' } } },
+                                    tooltip: {
+                                        backgroundColor: '#1E293B',
+                                        callbacks: { label: (c) => ` ${c.dataset.label}: ${formatNumber(c.raw)}` }
+                                    },
+                                    datalabels: {
+                                        display: true,
+                                        align: 'top',
+                                        anchor: 'end',
+                                        offset: 4,
+                                        font: { size: 9, weight: 'bold' },
+                                        color: (context) => context.dataset.borderColor,
+                                        formatter: (val) => formatNumber(val)
+                                    }
+                                },
+                                scales: {
+                                    y: {
+                                        beginAtZero: true,
+                                        ticks: { font: { weight: 'bold', size: 10 }, callback: (v) => formatNumber(v) },
+                                        grid: { color: '#F8FAFC' }
+                                    },
+                                    x: {
+                                        ticks: {
+                                            font: { weight: 'bold', size: 9 },
+                                            maxRotation: 45,
+                                            minRotation: 45
+                                        },
+                                        grid: { display: false }
+                                    }
+                                }
+                            }}
+                        />
+                    </div>
+                </div>
+            )}
+
             {selectedProducts.length !== 1 && productPerformance.length > 0 && (
                 <div className="bg-white p-8 rounded-[32px] border border-gray-100 shadow-[0_2px_15px_rgba(0,0,0,0.02)] overflow-hidden">
-                    <h3 className="text-lg font-black text-gray-900 mb-6">Product Performance Breakdown</h3>
+                    <div className="flex items-center justify-between mb-6">
+                        <h3 className="text-lg font-black text-gray-900">
+                            {drillDownMonth ? `Product Breakdown for ${drillDownMonth}` : "Top Products Performance"}
+                        </h3>
+                        {drillDownMonth && (
+                            <span className="text-[10px] font-black text-blue-600 bg-blue-50 px-3 py-1 rounded-full uppercase tracking-widest border border-blue-100">
+                                Monthly Detailed View
+                            </span>
+                        )}
+                    </div>
                     <div className="overflow-x-auto">
                         <table className="w-full text-left">
                             <thead>
